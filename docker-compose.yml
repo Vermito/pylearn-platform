@@ -1,0 +1,757 @@
+services:
+
+  # =========================================================
+  # AUTH DATABASE
+  # =========================================================
+
+  auth-db:
+    image: postgres:16
+    container_name: pylearn-auth-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${AUTH_DB_USER}
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD}
+      POSTGRES_DB: ${AUTH_DB_NAME}
+
+    expose:
+      - "5432"
+
+    volumes:
+      - auth_postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${AUTH_DB_USER} -d ${AUTH_DB_NAME}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+
+  # =========================================================
+  # AUTH TEST DATABASE
+  # =========================================================
+
+  auth-test-db:
+    image: postgres:16
+    container_name: pylearn-auth-test-db
+    restart: unless-stopped
+
+    profiles:
+      - test
+
+    environment:
+      POSTGRES_USER: ${AUTH_TEST_DB_USER}
+      POSTGRES_PASSWORD: ${AUTH_TEST_DB_PASSWORD}
+      POSTGRES_DB: ${AUTH_TEST_DB_NAME}
+
+    expose:
+      - "5432"
+
+    volumes:
+      - auth_test_postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${AUTH_TEST_DB_USER} -d ${AUTH_TEST_DB_NAME}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+
+  # =========================================================
+  # EDUCATION DATABASE
+  # =========================================================
+
+  education-db:
+    image: postgres:16
+    container_name: pylearn-education-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${EDUCATION_DB_USER}
+      POSTGRES_PASSWORD: ${EDUCATION_DB_PASSWORD}
+      POSTGRES_DB: ${EDUCATION_DB_NAME}
+
+    expose:
+      - "5432"
+
+    volumes:
+      - education_postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${EDUCATION_DB_USER} -d ${EDUCATION_DB_NAME}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+
+  # =========================================================
+  # PROGRESS DATABASE
+  # =========================================================
+
+  progress-db:
+    image: postgres:16
+    container_name: pylearn-progress-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${PROGRESS_DB_USER}
+      POSTGRES_PASSWORD: ${PROGRESS_DB_PASSWORD}
+      POSTGRES_DB: ${PROGRESS_DB_NAME}
+
+    expose:
+      - "5432"
+
+    volumes:
+      - progress_postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${PROGRESS_DB_USER} -d ${PROGRESS_DB_NAME}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+
+  # =========================================================
+  # RABBITMQ
+  # =========================================================
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: pylearn-rabbitmq
+    restart: unless-stopped
+
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+
+    expose:
+      - "5672"
+
+    ports:
+      - "15672:15672"
+
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "rabbitmq-diagnostics",
+          "-q",
+          "ping"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+
+  # =========================================================
+  # REDIS
+  # =========================================================
+
+  redis:
+    image: redis:8-alpine
+    container_name: pylearn-redis
+    restart: unless-stopped
+
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes"
+      ]
+
+    expose:
+      - "6379"
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+
+  # =========================================================
+  # AUTH MIGRATION
+  # =========================================================
+
+  auth-migrate:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+
+    image: pylearn-auth-service:local
+
+    restart: "no"
+
+    env_file:
+      - .env
+
+    environment:
+      AUTH_DB_HOST: auth-db
+      AUTH_DB_PORT: 5432
+
+    command:
+      [
+        "alembic",
+        "upgrade",
+        "head"
+      ]
+
+    depends_on:
+      auth-db:
+        condition: service_healthy
+
+    networks:
+      - pylearn-network
+
+
+  # =========================================================
+  # EDUCATION MIGRATION
+  # =========================================================
+
+  education-migrate:
+    build:
+      context: ./services/education-service
+      dockerfile: Dockerfile
+
+    image: pylearn-education-service:local
+
+    restart: "no"
+
+    env_file:
+      - .env
+
+    environment:
+      EDUCATION_DB_HOST: education-db
+      EDUCATION_DB_PORT: 5432
+
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      RUNNER_SERVICE_URL: http://runner-service:8003
+
+    command:
+      [
+        "alembic",
+        "upgrade",
+        "head"
+      ]
+
+    depends_on:
+      education-db:
+        condition: service_healthy
+
+    networks:
+      - pylearn-network
+
+
+  # =========================================================
+  # PROGRESS MIGRATION
+  # =========================================================
+
+  progress-migrate:
+    build:
+      context: ./services/progress-service
+      dockerfile: Dockerfile
+
+    image: pylearn-progress-service:local
+
+    restart: "no"
+
+    env_file:
+      - .env
+
+    environment:
+      PROGRESS_DB_HOST: progress-db
+      PROGRESS_DB_PORT: 5432
+
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+
+    command:
+      [
+        "alembic",
+        "upgrade",
+        "head"
+      ]
+
+    depends_on:
+      progress-db:
+        condition: service_healthy
+
+    networks:
+      - pylearn-network
+
+
+  # =========================================================
+  # RUNNER
+  # =========================================================
+
+  runner-service:
+    build:
+      context: ./services/runner-service
+      dockerfile: Dockerfile
+
+    image: pylearn-runner-service:local
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    expose:
+      - "8003"
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+
+  # =========================================================
+  # AUTH SERVICE
+  # =========================================================
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+
+    image: pylearn-auth-service:local
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      AUTH_DB_HOST: auth-db
+      AUTH_DB_PORT: 5432
+
+      API_ROOT_PATH: /api/auth
+
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "*"
+      ]
+
+    expose:
+      - "8000"
+
+    depends_on:
+      auth-migrate:
+        condition: service_completed_successfully
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+
+  # =========================================================
+  # EDUCATION INSTANCE 1
+  # =========================================================
+
+  education-service-1:
+    build:
+      context: ./services/education-service
+      dockerfile: Dockerfile
+
+    image: pylearn-education-service:local
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      EDUCATION_DB_HOST: education-db
+      EDUCATION_DB_PORT: 5432
+
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      RUNNER_SERVICE_URL: http://runner-service:8003
+
+      API_ROOT_PATH: /api/education
+
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8001",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "*"
+      ]
+
+    expose:
+      - "8001"
+
+    depends_on:
+      education-migrate:
+        condition: service_completed_successfully
+
+      rabbitmq:
+        condition: service_healthy
+
+      runner-service:
+        condition: service_healthy
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+
+  # =========================================================
+  # EDUCATION INSTANCE 2
+  # =========================================================
+
+  education-service-2:
+    build:
+      context: ./services/education-service
+      dockerfile: Dockerfile
+
+    image: pylearn-education-service:local
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      EDUCATION_DB_HOST: education-db
+      EDUCATION_DB_PORT: 5432
+
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      RUNNER_SERVICE_URL: http://runner-service:8003
+
+      API_ROOT_PATH: /api/education
+
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8001",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "*"
+      ]
+
+    expose:
+      - "8001"
+
+    depends_on:
+      education-migrate:
+        condition: service_completed_successfully
+
+      rabbitmq:
+        condition: service_healthy
+
+      runner-service:
+        condition: service_healthy
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+
+  # =========================================================
+  # PROGRESS SERVICE
+  # =========================================================
+
+  progress-service:
+    build:
+      context: ./services/progress-service
+      dockerfile: Dockerfile
+
+    image: pylearn-progress-service:local
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      PROGRESS_DB_HOST: progress-db
+      PROGRESS_DB_PORT: 5432
+
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+
+      API_ROOT_PATH: /api/progress
+
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8002",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "*"
+      ]
+
+    expose:
+      - "8002"
+
+    depends_on:
+      progress-migrate:
+        condition: service_completed_successfully
+
+      rabbitmq:
+        condition: service_healthy
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+
+  # =========================================================
+  # NGINX API GATEWAY
+  # =========================================================
+
+  nginx:
+    image: nginx:alpine
+    container_name: pylearn-nginx
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+    depends_on:
+      auth-service:
+        condition: service_healthy
+
+      education-service-1:
+        condition: service_healthy
+
+      education-service-2:
+        condition: service_healthy
+
+      progress-service:
+        condition: service_healthy
+
+    networks:
+      - pylearn-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "-",
+          "http://127.0.0.1/health"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+
+  # =========================================================
+  # PROMETHEUS
+  # =========================================================
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    container_name: pylearn-prometheus
+    restart: unless-stopped
+
+    ports:
+      - "9090:9090"
+
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+
+    depends_on:
+      auth-service:
+        condition: service_healthy
+
+      education-service-1:
+        condition: service_healthy
+
+      education-service-2:
+        condition: service_healthy
+
+      progress-service:
+        condition: service_healthy
+
+      runner-service:
+        condition: service_healthy
+
+    networks:
+      - pylearn-network
+
+
+# =========================================================
+# VOLUMES
+# =========================================================
+
+volumes:
+  auth_postgres_data:
+  auth_test_postgres_data:
+  education_postgres_data:
+  progress_postgres_data:
+  rabbitmq_data:
+  redis_data:
+  prometheus_data:
+
+
+# =========================================================
+# NETWORK
+# =========================================================
+
+networks:
+  pylearn-network:
+    driver: bridge

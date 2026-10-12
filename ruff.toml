@@ -1,0 +1,46 @@
+target-version = "py312"
+
+line-length = 88
+
+extend-exclude = [
+    ".git",
+    ".github",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    "htmlcov",
+    "build",
+    "dist",
+]
+
+
+[lint]
+
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+]
+
+ignore = [
+    "E501",
+]
+
+
+[lint.per-file-ignores]
+
+"__init__.py" = [
+    "F401",
+]
+
+
+[format]
+
+quote-style = "double"
+
+indent-style = "space"
+
+line-ending = "auto"
