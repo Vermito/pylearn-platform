@@ -59,31 +59,8 @@ def test_session_factory(test_engine):
     )
 
 
-# ==========================================================
-# Dependency override для FastAPI
-#
-# Регистрируется один раз на сессию, а не при импорте.
-# ==========================================================
-
 @pytest_asyncio.fixture(scope="session", autouse=True)
-def override_get_db(test_session_factory):
-    async def _override_get_db():
-        async with test_session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_db] = _override_get_db
-    yield
-    app.dependency_overrides.clear()
-
-
-# ==========================================================
-# Подготовка схемы БД
-#
-# drop_all + create_all один раз за сессию.
-# ==========================================================
-
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def prepare_database(test_engine, override_get_db):
+async def prepare_database(test_engine):
     async with test_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
@@ -92,6 +69,51 @@ async def prepare_database(test_engine, override_get_db):
 
     async with test_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+
+
+# ==========================================================
+# Изоляция каждого теста через транзакцию
+#
+# Перед тестом открываем connection, начинаем транзакцию,
+# подменяем get_db так, чтобы он использовал эту транзакцию.
+# После теста — откат.
+# ==========================================================
+
+@pytest_asyncio.fixture(autouse=True)
+async def db_transaction(test_engine):
+    """
+    Обёртка для каждого теста: открывает транзакцию,
+    откатывает после завершения.
+    """
+    async with test_engine.connect() as connection:
+        trans = await connection.begin()
+
+        # Создаём сессию, привязанную к этой connection
+        session_factory = async_sessionmaker(
+            bind=connection,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
+
+        async def _override_get_db():
+            async with session_factory() as session:
+                yield session
+
+        # Запоминаем старый override и ставим новый
+        old_override = app.dependency_overrides.get(get_db)
+        app.dependency_overrides[get_db] = _override_get_db
+
+        yield
+
+        # Возвращаем старый override
+        if old_override is not None:
+            app.dependency_overrides[get_db] = old_override
+        else:
+            app.dependency_overrides.pop(get_db, None)
+
+        # Откат транзакции
+        await trans.rollback()
 
 
 # ==========================================================
@@ -111,10 +133,13 @@ async def client():
 
 # ==========================================================
 # Пользователи
+#
+# Используют ту же session_factory, что и db_transaction,
+# чтобы попадать в транзакцию текущего теста.
 # ==========================================================
 
 @pytest_asyncio.fixture
-async def regular_user(test_session_factory):
+async def regular_user(db_transaction, test_session_factory):
     async with test_session_factory() as session:
         user = User(
             username="regular",
@@ -142,7 +167,7 @@ async def user_token(regular_user):
 
 
 @pytest_asyncio.fixture
-async def admin_user(test_session_factory):
+async def admin_user(db_transaction, test_session_factory):
     async with test_session_factory() as session:
         admin = User(
             username="admin",
