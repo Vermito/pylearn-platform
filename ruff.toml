@@ -1,23 +1,14 @@
 target-version = "py312"
-
 line-length = 88
 
 extend-exclude = [
-    ".git",
-    ".github",
     ".venv",
     "venv",
-    "__pycache__",
-    ".pytest_cache",
-    ".ruff_cache",
-    "htmlcov",
-    "build",
-    "dist",
+    "**/__pycache__/**",
+    "**/alembic/versions/**",
 ]
 
-
 [lint]
-
 select = [
     "E4",
     "E7",
@@ -26,21 +17,6 @@ select = [
 ]
 
 ignore = [
-    "E501",
-]
-
-
-[lint.per-file-ignores]
-
-"__init__.py" = [
     "F401",
+    "F841",
 ]
-
-
-[format]
-
-quote-style = "double"
-
-indent-style = "space"
-
-line-ending = "auto"

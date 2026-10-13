@@ -12,7 +12,6 @@ from app.api.routes.users import (
 )
 from app.core.config import settings
 
-
 app = FastAPI(
     title="PyLearn Auth Service",
     description=(

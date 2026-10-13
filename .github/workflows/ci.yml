@@ -1,0 +1,263 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+
+permissions:
+  contents: read
+
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+
+env:
+  PYTHON_VERSION: "3.12"
+
+  # ========================================================
+  # JWT
+  # ========================================================
+
+  JWT_SECRET: ${{ secrets.JWT_SECRET }}
+  JWT_ALGORITHM: HS256
+
+  ACCESS_TOKEN_EXPIRE_MINUTES: 30
+  REFRESH_TOKEN_EXPIRE_DAYS: 7
+
+
+  # ========================================================
+  # RUNNER
+  # ========================================================
+
+  RUNNER_API_KEY: ${{ secrets.RUNNER_API_KEY }}
+  RUNNER_SERVICE_URL: http://127.0.0.1:8003
+
+
+  # ========================================================
+  # EDUCATION DATABASE
+  #
+  # Unit tests do not connect to it,
+  # but Settings may be imported.
+  # ========================================================
+
+  EDUCATION_DB_USER: pylearn_ci
+  EDUCATION_DB_PASSWORD: pylearn_ci_password
+  EDUCATION_DB_NAME: education_ci
+  EDUCATION_DB_HOST: localhost
+  EDUCATION_DB_PORT: 5432
+
+
+  # ========================================================
+  # PROGRESS DATABASE
+  # ========================================================
+
+  PROGRESS_DB_USER: pylearn_ci
+  PROGRESS_DB_PASSWORD: pylearn_ci_password
+  PROGRESS_DB_NAME: progress_ci
+  PROGRESS_DB_HOST: localhost
+  PROGRESS_DB_PORT: 5432
+
+
+  # ========================================================
+  # RABBITMQ
+  # ========================================================
+
+  RABBITMQ_USER: pylearn_ci
+  RABBITMQ_PASSWORD: pylearn_ci_password
+  RABBITMQ_HOST: localhost
+  RABBITMQ_PORT: 5672
+  RABBITMQ_VHOST: /
+
+
+  # ========================================================
+  # REDIS
+  # ========================================================
+
+  REDIS_HOST: localhost
+  REDIS_PORT: 6379
+  REDIS_DB: 0
+  REDIS_CACHE_TTL_SECONDS: 300
+
+
+jobs:
+
+  # ========================================================
+  # RUFF
+  # ========================================================
+
+  ruff:
+    name: Ruff
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Run Ruff
+        run: |
+          ruff check .
+
+
+  # ========================================================
+  # AUTH INTEGRATION TESTS
+  # ========================================================
+
+  auth-tests:
+    name: Auth integration tests
+
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+
+        env:
+          POSTGRES_USER: pylearn
+          POSTGRES_PASSWORD: ${{ secrets.AUTH_TEST_DB_PASSWORD }}
+          POSTGRES_DB: auth_test_db
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd="pg_isready -U pylearn -d auth_test_db"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      AUTH_DB_USER: pylearn
+      AUTH_DB_PASSWORD: ${{ secrets.AUTH_TEST_DB_PASSWORD }}
+      AUTH_DB_NAME: auth_test_db
+      AUTH_DB_HOST: localhost
+      AUTH_DB_PORT: 5432
+
+      AUTH_TEST_DB_USER: pylearn
+      AUTH_TEST_DB_PASSWORD: ${{ secrets.AUTH_TEST_DB_PASSWORD }}
+      AUTH_TEST_DB_NAME: auth_test_db
+      AUTH_TEST_DB_HOST: localhost
+      AUTH_TEST_DB_PORT: 5432
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: poetry
+          cache-dependency-path: |
+            services/auth-service/poetry.lock
+
+      - name: Install Poetry
+        run: |
+          pipx install poetry
+
+      - name: Install Auth dependencies
+        working-directory: services/auth-service
+        run: |
+          poetry install \
+            --with dev \
+            --no-root \
+            --no-interaction
+
+      - name: Run Auth tests
+        working-directory: services/auth-service
+        run: |
+          poetry run pytest \
+            -v \
+            --cov=app \
+            --cov-report=term-missing
+
+
+  # ========================================================
+  # UNIT TESTS
+  # ========================================================
+
+  unit-tests:
+    name: Unit tests - ${{ matrix.service }}
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        service:
+          - education-service
+          - progress-service
+          - runner-service
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: poetry
+          cache-dependency-path: |
+            services/${{ matrix.service }}/poetry.lock
+
+      - name: Install Poetry
+        run: |
+          pipx install poetry
+
+      - name: Install dependencies
+        working-directory: services/${{ matrix.service }}
+        run: |
+          poetry install \
+            --with dev \
+            --no-root \
+            --no-interaction
+
+      - name: Run tests
+        working-directory: services/${{ matrix.service }}
+        run: |
+          poetry run pytest \
+            -v \
+            --cov=app \
+            --cov-report=term-missing
+
+
+  # ========================================================
+  # CI SUMMARY
+  # ========================================================
+
+  ci-success:
+    name: CI successful
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - ruff
+      - auth-tests
+      - unit-tests
+
+    steps:
+      - name: CI passed
+        run: |
+          echo "PyLearn CI passed successfully."
