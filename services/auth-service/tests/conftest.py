@@ -1,3 +1,6 @@
+import asyncio
+
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
@@ -13,28 +16,74 @@ from app.db.database import get_db
 from app.main import app
 from app.models.user import User
 
-test_engine = create_async_engine(
-    settings.test_database_url,
-    echo=False,
-)
 
-TestSessionLocal = async_sessionmaker(
-    bind=test_engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+# ==========================================================
+# Event loop
+#
+# ОДИН на всю сессию тестирования.
+# Без этого pytest-asyncio создаёт новый loop для каждого
+# теста, и engine (созданный один раз) падает с ошибкой
+# "got Future attached to a different loop".
+# ==========================================================
 
-
-async def override_get_db():
-    async with TestSessionLocal() as session:
-        yield session
-
-
-app.dependency_overrides[get_db] = override_get_db
+@pytest.fixture(scope="session")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def prepare_database():
+# ==========================================================
+# Engine
+#
+# Создаётся ВНУТРИ session-scoped loop, а не при импорте
+# модуля. Это ключевое отличие от прежней версии.
+# ==========================================================
+
+@pytest_asyncio.fixture(scope="session")
+async def test_engine():
+    engine = create_async_engine(
+        settings.test_database_url,
+        echo=False,
+    )
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="session")
+def test_session_factory(test_engine):
+    return async_sessionmaker(
+        bind=test_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+
+# ==========================================================
+# Dependency override для FastAPI
+#
+# Регистрируется один раз на сессию, а не при импорте.
+# ==========================================================
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+def override_get_db(test_session_factory):
+    async def _override_get_db():
+        async with test_session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    yield
+    app.dependency_overrides.clear()
+
+
+# ==========================================================
+# Подготовка схемы БД
+#
+# drop_all + create_all один раз за сессию.
+# ==========================================================
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def prepare_database(test_engine, override_get_db):
     async with test_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
@@ -44,6 +93,10 @@ async def prepare_database():
     async with test_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
 
+
+# ==========================================================
+# HTTP-клиент
+# ==========================================================
 
 @pytest_asyncio.fixture
 async def client():
@@ -56,9 +109,13 @@ async def client():
         yield test_client
 
 
+# ==========================================================
+# Пользователи
+# ==========================================================
+
 @pytest_asyncio.fixture
-async def regular_user():
-    async with TestSessionLocal() as session:
+async def regular_user(test_session_factory):
+    async with test_session_factory() as session:
         user = User(
             username="regular",
             email="regular@example.com",
@@ -85,8 +142,8 @@ async def user_token(regular_user):
 
 
 @pytest_asyncio.fixture
-async def admin_user():
-    async with TestSessionLocal() as session:
+async def admin_user(test_session_factory):
+    async with test_session_factory() as session:
         admin = User(
             username="admin",
             email="admin@example.com",
