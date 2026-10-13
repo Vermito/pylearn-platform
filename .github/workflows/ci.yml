@@ -181,13 +181,41 @@ jobs:
 
 
       # ----------------------------------------------------
+      # Verify secrets are present
+      #
+      # Временно можно оставить для отладки.
+      # Значения секретов НЕ выводятся в лог.
+      # ----------------------------------------------------
+
+      - name: Verify secrets are present
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.JWT_SECRET }}" ]; then
+            echo "::error::JWT_SECRET is empty or not set!"
+            exit 1
+          fi
+          if [ -z "${{ secrets.RUNNER_API_KEY }}" ]; then
+            echo "::error::RUNNER_API_KEY is empty or not set!"
+            exit 1
+          fi
+          echo "Both secrets are set (values hidden)"
+
+
+      # ----------------------------------------------------
       # Poetry
+      #
+      # pip ставит исполняемый файл poetry в ~/.local/bin,
+      # который по умолчанию отсутствует в PATH.
+      # Добавляем его через $GITHUB_PATH — это официальный
+      # способ сохранить PATH между шагами.
       # ----------------------------------------------------
 
       - name: Install Poetry
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install poetry
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
 
       - name: Display versions
